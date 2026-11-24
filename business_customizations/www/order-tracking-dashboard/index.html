@@ -1,0 +1,10 @@
+{% extends "templates/web.html" %}
+
+{% block title %}Order Tracking Dashboard{% endblock %}
+
+{% block page_content %}
+<div class="order-tracking-wrapper">
+  <input type="text" id="order-search" placeholder="Enter Sales Order or Customer Name" class="form-control mb-3">
+  <div id="order-tracking-results"></div>
+</div>
+{% endblock %}

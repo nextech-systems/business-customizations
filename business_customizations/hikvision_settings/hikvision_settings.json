@@ -1,0 +1,178 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:title",
+ "creation": "2024-01-15 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "section_break_1",
+  "enabled",
+  "hikvision_ip",
+  "hikvision_username",
+  "hikvision_password",
+  "section_break_2",
+  "sync_method",
+  "csv_file_path",
+  "section_break_3",
+  "database_type",
+  "database_host",
+  "database_name",
+  "database_username",
+  "database_password",
+  "section_break_4",
+  "auto_sync",
+  "sync_frequency",
+  "last_sync"
+ ],
+ "fields": [
+  {
+   "default": "Hikvision Settings",
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Title"
+  },
+  {
+   "fieldname": "section_break_1",
+   "fieldtype": "Section Break",
+   "label": "Hikvision System Settings"
+  },
+  {
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enable Hikvision Sync"
+  },
+  {
+   "fieldname": "hikvision_ip",
+   "fieldtype": "Data",
+   "label": "Hikvision System IP"
+  },
+  {
+   "fieldname": "hikvision_username",
+   "fieldtype": "Data",
+   "label": "Username"
+  },
+  {
+   "fieldname": "hikvision_password",
+   "fieldtype": "Password",
+   "label": "Password"
+  },
+  {
+   "fieldname": "section_break_2",
+   "fieldtype": "Section Break",
+   "label": "Sync Method"
+  },
+  {
+   "default": "CSV",
+   "fieldname": "sync_method",
+   "fieldtype": "Select",
+   "label": "Data Source",
+   "options": "CSV\nDatabase\nAPI"
+  },
+  {
+   "depends_on": "eval:doc.sync_method=='CSV'",
+   "fieldname": "csv_file_path",
+   "fieldtype": "Data",
+   "label": "CSV File Path",
+   "description": "Path to CSV file (relative to frappe-bench or absolute path)"
+  },
+  {
+   "fieldname": "section_break_3",
+   "fieldtype": "Section Break",
+   "label": "Database Settings"
+  },
+  {
+   "depends_on": "eval:doc.sync_method=='Database'",
+   "fieldname": "database_type",
+   "fieldtype": "Select",
+   "label": "Database Type",
+   "options": "SQL Server\nMySQL\nPostgreSQL"
+  },
+  {
+   "depends_on": "eval:doc.sync_method=='Database'",
+   "fieldname": "database_host",
+   "fieldtype": "Data",
+   "label": "Database Host"
+  },
+  {
+   "depends_on": "eval:doc.sync_method=='Database'",
+   "fieldname": "database_name",
+   "fieldtype": "Data",
+   "label": "Database Name"
+  },
+  {
+   "depends_on": "eval:doc.sync_method=='Database'",
+   "fieldname": "database_username",
+   "fieldtype": "Data",
+   "label": "Database Username"
+  },
+  {
+   "depends_on": "eval:doc.sync_method=='Database'",
+   "fieldname": "database_password",
+   "fieldtype": "Password",
+   "label": "Database Password"
+  },
+  {
+   "fieldname": "section_break_4",
+   "fieldtype": "Section Break",
+   "label": "Automation Settings"
+  },
+  {
+   "default": "0",
+   "fieldname": "auto_sync",
+   "fieldtype": "Check",
+   "label": "Enable Automatic Sync"
+  },
+  {
+   "default": "Daily",
+   "depends_on": "auto_sync",
+   "fieldname": "sync_frequency",
+   "fieldtype": "Select",
+   "label": "Sync Frequency",
+   "options": "Hourly\nDaily\nWeekly"
+  },
+  {
+   "fieldname": "last_sync",
+   "fieldtype": "Datetime",
+   "label": "Last Sync",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2024-01-15 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Business Customizations",
+ "name": "Hikvision Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

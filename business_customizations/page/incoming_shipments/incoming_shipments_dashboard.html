@@ -1,0 +1,265 @@
+// ═══════════════════════════════════════════════
+//  UPDATED mcFetchERPNext — reads real DB fields
+//  Drop this in to replace the old function in
+//  incoming_shipments_dashboard.html
+// ═══════════════════════════════════════════════
+
+function mcFetchERPNext() {
+  return new Promise((resolve, reject) => {
+    frappe.call({
+      method: 'frappe.client.get_list',
+      args: {
+        doctype: 'Purchase Order',
+        fields: [
+          'name', 'supplier', 'supplier_name',
+          'order_confirmation_no',
+          'transaction_date', 'schedule_date', 'status',
+          'grand_total', 'per_received', 'per_billed',
+          // Real shipping fields
+          'vessel_name', 'voyage_no', 'carrier',
+          'container_no', 'bill_of_lading', 'eta_kingston',
+          'container_status', 'customs_status', 'local_charges',
+          'shipping_invoice_no', 'shipping_notes'
+        ],
+        filters: [['status', 'not in', ['Cancelled', 'Closed']]],
+        limit_page_length: 200,
+        order_by: 'eta_kingston asc, transaction_date desc'
+      },
+      callback: function(r) {
+        if (r.exc) { reject(new Error(r.exc)); return; }
+        const edits = mcEdits();
+        const rows = (r.message || []).map(po => {
+
+          // ── ETA: use eta_kingston if set, else schedule_date, else +21d ──
+          let eta;
+          if (po.eta_kingston) {
+            eta = new Date(po.eta_kingston);
+          } else if (po.schedule_date) {
+            eta = new Date(po.schedule_date);
+          } else {
+            eta = mcFutureDate(21);
+          }
+          if (isNaN(eta.getTime())) eta = mcFutureDate(21);
+
+          // ── Container status: use real field, fallback to ERP status ──
+          const ov = edits[po.name] || {};
+          let status = ov.status || po.container_status || '';
+          if (!status) {
+            // Fallback inference from ERP status
+            if (po.status === 'Completed') status = 'Fully Received';
+            else if (po.status === 'To Bill') status = 'Partially Received';
+            else if (po.vessel_name || po.container_no || po.bill_of_lading) status = 'En Route';
+            else status = 'Ordered';
+          }
+
+          // ── Payment ──
+          const paidPct = Math.round(po.per_received || 0);
+          const payment = paidPct === 100 ? 'Fully Paid' : paidPct > 0 ? 'Partially Paid' : 'Unpaid';
+
+          // ── Carrier label from field or container prefix ──
+          const carrier = po.carrier || mcCarrierLabel(po.container_no || '');
+
+          // ── Container numbers array for tracking links ──
+          const containers = po.container_no
+            ? po.container_no.split(/[\/,\s]+/).map(c => c.trim()).filter(c => /^[A-Z]{4}\d{7}$/.test(c))
+            : [];
+
+          // ── Primary tracking reference ──
+          const trackingRef = containers[0] || po.bill_of_lading || '';
+
+          return {
+            po:            po.name,
+            so:            po.order_confirmation_no || '',
+            supplier:      po.supplier_name || po.supplier,
+            country:       mcCountryFromCarrier(carrier),
+            product:       '',   // filled by mcFetchItems
+            value:         Math.round(po.grand_total || 0),
+            eta,
+            status,
+            customs:       ov.customs       || po.customs_status       || 'Not Filed',
+            local_charges: ov.local_charges || po.local_charges        || 'Not Paid',
+            payment,
+            paid_pct:      paidPct,
+            notes:         ov.notes !== undefined ? ov.notes : (po.shipping_notes || ''),
+            // Real shipping fields
+            vessel:        po.vessel_name   || '',
+            voyage:        po.voyage_no     || '',
+            carrier:       carrier,
+            container_no:  po.container_no  || '',
+            containers,                          // parsed array
+            bol:           ov.bol           || po.bill_of_lading || '',
+            tracking:      ov.tracking      || trackingRef,
+            shipping_invoice: po.shipping_invoice_no || '',
+            has_shipping_docs: !!(po.vessel_name || po.container_no || po.bill_of_lading),
+            erpnext_id:    po.name,
+            trackingResult: null
+          };
+        });
+
+        mcFetchItems(rows).then(resolve).catch(() => resolve(rows));
+      },
+      error: function(err) { reject(new Error(err.message || 'frappe.call failed')); }
+    });
+  });
+}
+
+// ── Country flag from carrier ──
+function mcCountryFromCarrier(carrier) {
+  if (!carrier) return '🌍';
+  const c = carrier.toUpperCase();
+  if (c.includes('CMA') || c.includes('MAERSK') || c.includes('MSC')) return '🌊';
+  return '🌍';
+}
+
+// ═══════════════════════════════════════════════
+//  UPDATED mcSaveToServer — saves all shipping fields
+// ═══════════════════════════════════════════════
+async function mcSaveToServer(po, updates) {
+  try {
+    // Map dashboard fields back to ERPNext custom fields
+    const fieldMap = {
+      status:        'container_status',
+      customs:       'customs_status',
+      local_charges: 'local_charges',
+      notes:         'shipping_notes',
+      tracking:      'container_no',
+      bol:           'bill_of_lading',
+    };
+    const erpUpdates = {};
+    for (const [dashKey, erpKey] of Object.entries(fieldMap)) {
+      if (updates[dashKey] !== undefined) erpUpdates[erpKey] = updates[dashKey];
+    }
+    if (Object.keys(erpUpdates).length === 0) return;
+
+    await frappe.call({
+      method: 'frappe.client.set_value',
+      args: {
+        doctype: 'Purchase Order',
+        name: po,
+        fieldname: erpUpdates
+      }
+    });
+  } catch(e) {
+    console.error('Server save failed for ' + po, e);
+    mcToast('Saved locally — server sync failed', 'warn');
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  UPDATED TABLE ROW — shows vessel, containers,
+//  CMA CGM direct tracking link
+// ═══════════════════════════════════════════════
+function mcRenderTable() {
+  const tbody = document.getElementById('mc-tbody');
+  document.getElementById('mc-row-count').textContent =
+    MC.filtered.length + ' shipment' + (MC.filtered.length !== 1 ? 's' : '');
+  const sorted = mcGetSorted(MC.filtered);
+  if (!sorted.length) {
+    tbody.innerHTML = `<tr><td colspan="15"><div class="mc-empty"><div style="font-size:28px">📦</div><p>No shipments match your filters.</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = sorted.map(s => {
+    const idx = MC.shipments.indexOf(s);
+    const days = mcDaysUntil(s.eta);
+    const nc = (s.notes && (s.notes.startsWith('⚠') || s.notes.startsWith('🔴'))) ? 'mc-flag-note' : '';
+
+    // ── Tracking cell: vessel + containers + CMA CGM link ──
+    let trkHtml = '';
+    if (s.vessel) {
+      trkHtml += `<div style="font-weight:600;font-size:11.5px;color:var(--blue)">🚢 ${s.vessel}</div>`;
+      if (s.voyage) trkHtml += `<div style="font-size:10px;color:var(--muted)">Voyage ${s.voyage}</div>`;
+    }
+    if (s.containers && s.containers.length) {
+      s.containers.forEach(c => {
+        const trackUrl = `https://www.cma-cgm.com/ebusiness/tracking/search?number=${c}`;
+        trkHtml += `<div style="font-family:'DM Mono',monospace;font-size:10.5px;margin-top:2px">
+          <a href="${trackUrl}" target="_blank" style="color:var(--blue);text-decoration:none" title="Track on CMA CGM">
+            📦 ${c} ↗
+          </a>
+        </div>`;
+      });
+    } else if (s.bol) {
+      const bolUrl = `https://www.cma-cgm.com/ebusiness/tracking/search?number=${s.bol}`;
+      trkHtml += `<div style="font-size:10px;color:var(--muted);font-family:'DM Mono',monospace">
+        <a href="${bolUrl}" target="_blank" style="color:var(--blue)">BOL: ${s.bol} ↗</a>
+      </div>`;
+    }
+    if (!trkHtml) trkHtml = `<span style="color:var(--muted);font-size:10.5px">—</span>`;
+
+    return `<tr>
+      <td><a class="mc-po-link" onclick="mcOpenEdit(${idx})">${s.po}</a></td>
+      <td style="font-size:11px;color:var(--muted)">${s.so || '—'}</td>
+      <td>
+        <div class="mc-supp-cell">
+          <div class="mc-supp-avatar">${mcInitials(s.supplier)}</div>
+          <div>
+            <div class="mc-supp-name">${s.supplier}</div>
+            ${s.carrier ? `<div class="mc-supp-ctry">${s.carrier}</div>` : ''}
+          </div>
+        </div>
+      </td>
+      <td style="max-width:180px;white-space:normal;line-height:1.4;font-size:11.5px">${s.product}</td>
+      <td style="font-weight:700;color:var(--blue)">${mcFmtVal(s.value)}</td>
+      <td>${mcPayBadge(s.payment)}</td>
+      <td style="min-width:100px">${mcProgressBar(s.paid_pct)}</td>
+      <td>${mcDaysChip(days, s.status)}</td>
+      <td>${mcStatusBadge(s.status)}</td>
+      <td onclick="mcInlineEdit(this,'customs',${idx})" style="cursor:pointer">${mcCustomsBadge(s.customs)}</td>
+      <td onclick="mcInlineEdit(this,'local_charges',${idx})" style="cursor:pointer">${mcLocalBadge(s.local_charges)}</td>
+      <td>
+        <div style="font-weight:600;font-size:12px">${mcFmtDate(s.eta)}</div>
+        ${s.vessel ? `<div style="font-size:9.5px;color:var(--muted)">ETA Kingston</div>` : ''}
+      </td>
+      <td>${trkHtml}</td>
+      <td onclick="mcInlineEditNote(this,${idx})" style="cursor:pointer">
+        <div class="mc-note-cell ${nc}" title="${s.notes || ''}">${s.notes || '—'}</div>
+      </td>
+      <td><button class="mc-btn mc-btn-outline" style="height:26px;padding:0 9px;font-size:10.5px" onclick="mcOpenEdit(${idx})">✏ Edit</button></td>
+    </tr>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════
+//  UPDATED EDIT MODAL — shows vessel/voyage/carrier
+//  and CMA CGM tracking button
+// ═══════════════════════════════════════════════
+function mcOpenEdit(idx) {
+  MC.editIdx = idx;
+  const s = MC.shipments[idx];
+  document.getElementById('mc-modal-po').textContent  = `Edit — ${s.po}`;
+  document.getElementById('mc-m-notes').value         = s.notes || '';
+  document.getElementById('mc-m-tracking').value      = s.container_no || '';
+  document.getElementById('mc-m-bol').value           = s.bol || '';
+  document.getElementById('mc-m-customs').value       = s.customs || 'Not Filed';
+  document.getElementById('mc-m-local').value         = s.local_charges || 'Not Paid';
+  document.getElementById('mc-m-status').value        = s.status || 'Ordered';
+  document.getElementById('mc-trk-row').style.display = 'none';
+
+  // Show vessel info if available
+  const infoEl = document.getElementById('mc-vessel-info');
+  if (infoEl) {
+    if (s.vessel) {
+      infoEl.style.display = '';
+      infoEl.innerHTML = `
+        <div style="background:var(--blue-lt);border-radius:8px;padding:10px 12px;font-size:11.5px;color:var(--blue)">
+          🚢 <strong>${s.vessel}</strong> · Voyage ${s.voyage || '—'} · ${s.carrier || ''}
+          ${s.containers && s.containers.length ? `<br>
+            📦 ${s.containers.map(c =>
+              `<a href="https://www.cma-cgm.com/ebusiness/tracking/search?number=${c}"
+                 target="_blank" style="color:var(--blue);font-family:'DM Mono',monospace;font-size:10.5px">${c} ↗</a>`
+            ).join(' · ')}` : ''}
+          ${s.bol ? `<br>📄 BOL: <span style="font-family:'DM Mono',monospace">${s.bol}</span>` : ''}
+        </div>`;
+    } else {
+      infoEl.style.display = 'none';
+    }
+  }
+
+  if (s.trackingResult) mcShowTrkResult(s.trackingResult);
+  document.getElementById('mc-edit-ov').classList.add('open');
+}
+
+// NOTE: You also need to add this div to the modal body in the HTML,
+// after the opening <div class="mc-modal-body"> tag:
+//
+// <div class="mc-modal-field full" id="mc-vessel-info" style="display:none"></div>
